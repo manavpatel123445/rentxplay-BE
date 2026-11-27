@@ -8,20 +8,48 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "node --watch --env-file-if-exists=.env src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "dev": "prisma generate && node --watch --env-file-if-exists=.env src/server.ts",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
     "start": "node --env-file-if-exists=.env dist/server.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "prisma generate && tsc -p tsconfig.json",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
+    "db:studio": "prisma studio",
+    "test": "BCRYPT_COST=4 node --experimental-vm-modules --env-file-if-exists=.env node_modules/jest/bin/jest.js",
+    "lint": "eslint ."
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "express": "^5.3.0",
-    "helmet": "^8.3.0"
+    "helmet": "^8.3.0",
+    "jose": "^6.2.18",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@jest/globals": "^30.5.2",
+    "@swc/core": "^1.16.22",
+    "@swc/jest": "^0.2.39",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.11",
-    "typescript": "^7.0.2"
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "dotenv": "^18.0.10",
+    "eslint": "^10.15.0",
+    "jest": "^30.5.2",
+    "prisma": "^7.10.1",
+    "supertest": "^7.3.2",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.74.0"
   }
 }

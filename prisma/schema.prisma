@@ -1,0 +1,501 @@
+// RentXPlay data model. Source of truth: docs/01-data-model.md.
+// Constraints Prisma cannot express (no double booking, CHECKs) live in the
+// hand-written part of prisma/migrations/*_init/migration.sql.
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  moduleFormat           = "esm"
+  importFileExtension    = "ts"
+  generatedFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  user
+  admin
+
+  @@map("user_role")
+}
+
+enum KycStatus {
+  none
+  pending
+  verified
+  rejected
+
+  @@map("kyc_status")
+}
+
+enum ItemStatus {
+  draft
+  pending_review
+  live
+  paused
+  rejected
+
+  @@map("item_status")
+}
+
+enum ItemCondition {
+  like_new
+  good
+  fair
+
+  @@map("item_condition")
+}
+
+enum Handover {
+  pickup
+  delivery
+
+  @@map("handover")
+}
+
+enum BookingStatus {
+  requested
+  approved
+  paid
+  picked_up
+  returned
+  completed
+  rejected
+  expired
+  cancelled
+  disputed
+
+  @@map("booking_status")
+}
+
+enum PaymentKind {
+  charge
+  refund
+  deposit_refund
+  deposit_claim
+
+  @@map("payment_kind")
+}
+
+enum PaymentStatus {
+  created
+  pending
+  succeeded
+  failed
+
+  @@map("payment_status")
+}
+
+enum PhotoStage {
+  pickup
+  return
+
+  @@map("photo_stage")
+}
+
+enum DisputeStatus {
+  open
+  resolved
+
+  @@map("dispute_status")
+}
+
+// ── Identity ─────────────────────────────────────────────────────────────
+
+model User {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Collected after sign-up (PATCH /me).
+  name            String?
+  email           String    @unique @db.Citext
+  /// +91XXXXXXXXXX. Added and verified by OTP after sign-up, before the first booking.
+  phone           String?   @unique
+  phoneVerifiedAt DateTime? @map("phone_verified_at") @db.Timestamptz(6)
+  passwordHash    String    @map("password_hash")
+  role            UserRole  @default(user)
+  kycStatus       KycStatus @default(none) @map("kyc_status")
+  avatarKey       String?   @map("avatar_key")
+  area            String?
+  ratingAvg       Decimal?  @map("rating_avg") @db.Decimal(2, 1)
+  ratingCount     Int       @default(0) @map("rating_count")
+  /// Owner cancellations after payment; 3 pause their listings.
+  strikes         Int       @default(0)
+  /// Hours the owner usually takes to reply (cached).
+  replyHours      Int?      @map("reply_hours")
+  blockedAt       DateTime? @map("blocked_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  refreshTokens   RefreshToken[]
+  addresses       Address[]
+  items           Item[]
+  rentals         Booking[]       @relation("renter")
+  ownedBookings   Booking[]       @relation("owner")
+  bookingEvents   BookingEvent[]
+  handoverPhotos  HandoverPhoto[]
+  reviewsWritten  Review[]        @relation("author")
+  reviewsReceived Review[]        @relation("subject")
+  disputesOpened  Dispute[]       @relation("openedBy")
+  disputesHandled Dispute[]       @relation("resolvedBy")
+  messages        Message[]
+  notifications   Notification[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  /// SHA-256 of the token; the token itself is never stored.
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  replacedBy String?   @map("replaced_by") @db.Uuid
+  userAgent  String?   @map("user_agent")
+  ip         String?
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Address {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  label     String
+  line1     String
+  line2     String?
+  area      String
+  pincode   String
+  lat       Float
+  lng       Float
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("addresses")
+}
+
+// ── Catalogue ────────────────────────────────────────────────────────────
+
+model CategoryGroup {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug      String   @unique
+  name      String
+  position  Int      @default(0)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  categories Category[]
+
+  @@map("category_groups")
+}
+
+model Category {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupId    String   @map("group_id") @db.Uuid
+  slug       String   @unique
+  name       String
+  /// Fields owners fill in: [{ key, label, type }]
+  specSchema Json     @default("[]") @map("spec_schema")
+  rulesNote  String?  @map("rules_note")
+  position   Int      @default(0)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  group CategoryGroup @relation(fields: [groupId], references: [id])
+  items Item[]
+
+  @@index([groupId])
+  @@map("categories")
+}
+
+model Item {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId            String        @map("owner_id") @db.Uuid
+  categoryId         String        @map("category_id") @db.Uuid
+  slug               String        @unique
+  title              String
+  description        String
+  inTheBox           String[]      @default([]) @map("in_the_box")
+  condition          ItemCondition
+  specs              Json          @default("{}")
+  price1dPaise       Int           @map("price_1d_paise")
+  price3dPaise       Int           @map("price_3d_paise")
+  price7dPaise       Int           @map("price_7d_paise")
+  depositPaise       Int           @map("deposit_paise")
+  /// Null = pickup only.
+  deliveryFeePaise   Int?          @map("delivery_fee_paise")
+  deliveryRadiusKm   Int?          @map("delivery_radius_km")
+  minDays            Int           @default(1) @map("min_days")
+  maxDays            Int           @default(30) @map("max_days")
+  area               String
+  /// Exact point; never returned by the public API.
+  lat                Float
+  lng                Float
+  pickupInstructions String?       @map("pickup_instructions")
+  status             ItemStatus    @default(live)
+  rejectionReason    String?       @map("rejection_reason")
+  ratingAvg          Decimal?      @map("rating_avg") @db.Decimal(2, 1)
+  ratingCount        Int           @default(0) @map("rating_count")
+  popular            Boolean       @default(false)
+  deletedAt          DateTime?     @map("deleted_at") @db.Timestamptz(6)
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  owner    User        @relation(fields: [ownerId], references: [id])
+  category Category    @relation(fields: [categoryId], references: [id])
+  photos   ItemPhoto[]
+  blocks   ItemBlock[]
+  bookings Booking[]
+  reviews  Review[]
+
+  @@index([categoryId, status])
+  @@index([ownerId])
+  @@index([area])
+  @@map("items")
+}
+
+model ItemPhoto {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  itemId    String   @map("item_id") @db.Uuid
+  s3Key     String   @map("s3_key")
+  /// 0 = cover photo.
+  position  Int      @default(0)
+  width     Int?
+  height    Int?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, position])
+  @@map("item_photos")
+}
+
+/// Dates the owner blocks by hand. Inclusive range.
+model ItemBlock {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  itemId    String   @map("item_id") @db.Uuid
+  fromDate  DateTime @map("from_date") @db.Date
+  toDate    DateTime @map("to_date") @db.Date
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, fromDate])
+  @@map("item_blocks")
+}
+
+// ── Bookings and money ───────────────────────────────────────────────────
+
+model Booking {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Short public reference, e.g. RX-1042.
+  code             String        @unique
+  itemId           String        @map("item_id") @db.Uuid
+  renterId         String        @map("renter_id") @db.Uuid
+  ownerId          String        @map("owner_id") @db.Uuid
+  /// Pickup day.
+  startDate        DateTime      @map("start_date") @db.Date
+  /// Return day; free for the next renter.
+  endDate          DateTime      @map("end_date") @db.Date
+  days             Int
+  handover         Handover
+  /// Snapshot of the delivery address at request time.
+  deliveryAddress  Json?         @map("delivery_address")
+  // Prices are copied when the booking is requested.
+  ratePaise        Int           @map("rate_paise")
+  rentPaise        Int           @map("rent_paise")
+  serviceFeePaise  Int           @map("service_fee_paise")
+  deliveryFeePaise Int           @default(0) @map("delivery_fee_paise")
+  depositPaise     Int           @map("deposit_paise")
+  commissionPaise  Int           @map("commission_paise")
+  totalPaise       Int           @map("total_paise")
+  lateFeePaise     Int           @default(0) @map("late_fee_paise")
+  status           BookingStatus @default(requested)
+  expiresAt        DateTime?     @map("expires_at") @db.Timestamptz(6)
+  approvedAt       DateTime?     @map("approved_at") @db.Timestamptz(6)
+  paidAt           DateTime?     @map("paid_at") @db.Timestamptz(6)
+  pickedUpAt       DateTime?     @map("picked_up_at") @db.Timestamptz(6)
+  returnedAt       DateTime?     @map("returned_at") @db.Timestamptz(6)
+  completedAt      DateTime?     @map("completed_at") @db.Timestamptz(6)
+  cancelledAt      DateTime?     @map("cancelled_at") @db.Timestamptz(6)
+  cancelledBy      String?       @map("cancelled_by") @db.Uuid
+  cancelReason     String?       @map("cancel_reason")
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  item           Item            @relation(fields: [itemId], references: [id])
+  renter         User            @relation("renter", fields: [renterId], references: [id])
+  owner          User            @relation("owner", fields: [ownerId], references: [id])
+  events         BookingEvent[]
+  payments       Payment[]
+  handoverPhotos HandoverPhoto[]
+  reviews        Review[]
+  dispute        Dispute?
+  messages       Message[]
+
+  @@index([renterId, status, startDate(sort: Desc)])
+  @@index([ownerId, status, createdAt(sort: Desc)])
+  @@index([itemId, status])
+  @@index([status, expiresAt])
+  @@map("bookings")
+}
+
+/// Append-only history of every status change.
+model BookingEvent {
+  id         BigInt         @id @default(autoincrement())
+  bookingId  String         @map("booking_id") @db.Uuid
+  /// Null = system job.
+  actorId    String?        @map("actor_id") @db.Uuid
+  fromStatus BookingStatus? @map("from_status")
+  toStatus   BookingStatus  @map("to_status")
+  note       String?
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  actor   User?   @relation(fields: [actorId], references: [id])
+
+  @@index([bookingId, createdAt])
+  @@map("booking_events")
+}
+
+model Payment {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId         String        @map("booking_id") @db.Uuid
+  kind              PaymentKind
+  amountPaise       Int           @map("amount_paise")
+  status            PaymentStatus @default(created)
+  razorpayOrderId   String?       @unique @map("razorpay_order_id")
+  razorpayPaymentId String?       @unique @map("razorpay_payment_id")
+  razorpayRefundId  String?       @unique @map("razorpay_refund_id")
+  idempotencyKey    String        @unique @map("idempotency_key")
+  failureReason     String?       @map("failure_reason")
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+
+  @@index([bookingId])
+  @@map("payments")
+}
+
+/// Every Razorpay webhook, stored before processing. A repeat delivery hits the primary key.
+model WebhookEvent {
+  /// Razorpay's event id.
+  id          String    @id
+  event       String
+  payload     Json
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("webhook_events")
+}
+
+// ── Trust and communication ──────────────────────────────────────────────
+
+model HandoverPhoto {
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId  String     @map("booking_id") @db.Uuid
+  uploadedBy String     @map("uploaded_by") @db.Uuid
+  stage      PhotoStage
+  s3Key      String     @map("s3_key")
+  takenAt    DateTime   @default(now()) @map("taken_at") @db.Timestamptz(6)
+  createdAt  DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  booking  Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  uploader User    @relation(fields: [uploadedBy], references: [id])
+
+  @@index([bookingId, stage])
+  @@map("handover_photos")
+}
+
+model Review {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId String   @map("booking_id") @db.Uuid
+  authorId  String   @map("author_id") @db.Uuid
+  subjectId String   @map("subject_id") @db.Uuid
+  /// Null when the review is about the renter.
+  itemId    String?  @map("item_id") @db.Uuid
+  rating    Int
+  text      String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id])
+  author  User    @relation("author", fields: [authorId], references: [id])
+  subject User    @relation("subject", fields: [subjectId], references: [id])
+  item    Item?   @relation(fields: [itemId], references: [id])
+
+  @@unique([bookingId, authorId])
+  @@index([itemId, createdAt(sort: Desc)])
+  @@index([subjectId, createdAt(sort: Desc)])
+  @@map("reviews")
+}
+
+model Dispute {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId       String        @unique @map("booking_id") @db.Uuid
+  openedBy        String        @map("opened_by") @db.Uuid
+  reason          String
+  claimPaise      Int           @map("claim_paise")
+  status          DisputeStatus @default(open)
+  resolvedBy      String?       @map("resolved_by") @db.Uuid
+  ownerKeepsPaise Int?          @map("owner_keeps_paise")
+  resolutionNote  String?       @map("resolution_note")
+  resolvedAt      DateTime?     @map("resolved_at") @db.Timestamptz(6)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  booking  Booking @relation(fields: [bookingId], references: [id])
+  opener   User    @relation("openedBy", fields: [openedBy], references: [id])
+  resolver User?   @relation("resolvedBy", fields: [resolvedBy], references: [id])
+
+  @@index([status])
+  @@map("disputes")
+}
+
+model Message {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  bookingId String    @map("booking_id") @db.Uuid
+  senderId  String    @map("sender_id") @db.Uuid
+  body      String
+  photoKey  String?   @map("photo_key")
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  sender  User    @relation(fields: [senderId], references: [id])
+
+  @@index([bookingId, createdAt])
+  @@map("messages")
+}
+
+model Notification {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// booking_requested, booking_approved, payment_due, return_reminder…
+  type      String
+  data      Json      @default("{}")
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt(sort: Desc)])
+  @@map("notifications")
+}

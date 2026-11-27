@@ -3,21 +3,29 @@
     "target": "es2023",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["es2023"],
-    "types": ["node"],
-    "rootDir": "src",
-    "outDir": "dist",
-
+    "lib": [
+      "es2023"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "skipLibCheck": true,
-
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true,
     "rewriteRelativeImportExtensions": true,
-
-    "sourceMap": true
+    "sourceMap": true,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "prisma",
+    "prisma7.config.ts",
+    "eslint.config.js",
+    "jest.config.js"
+  ]
 }

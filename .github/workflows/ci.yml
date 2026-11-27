@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, staging, dev]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        # Same major version as Supabase. citext and btree_gist ship with the official image.
+        image: postgres:17
+        env:
+          POSTGRES_USER: rentxplay
+          POSTGRES_PASSWORD: rentxplay_ci
+          POSTGRES_DB: rentxplay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U rentxplay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://rentxplay:rentxplay_ci@localhost:5432/rentxplay
+      DIRECT_URL: postgresql://rentxplay:rentxplay_ci@localhost:5432/rentxplay
+      # Throwaway values for the CI database only; real secrets live in each environment's settings.
+      JWT_ACCESS_SECRET: ci-only-secret-not-used-anywhere-else-0123456789
+      CORS_ORIGINS: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - name: Create tables from the migrations
+        run: npx prisma migrate deploy
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
