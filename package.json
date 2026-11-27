@@ -18,7 +18,7 @@
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
     "test": "BCRYPT_COST=4 node --experimental-vm-modules --env-file-if-exists=.env node_modules/jest/bin/jest.js",
-    "lint": "eslint ."
+    "lint": "prisma generate && eslint ."
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",

@@ -42,6 +42,9 @@ jobs:
           cache: npm
 
       - run: npm ci
+      # The client is git-ignored (src/generated/); lint, types and tests all need it.
+      - name: Generate the Prisma client
+        run: npx prisma generate
       - name: Create tables from the migrations
         run: npx prisma migrate deploy
       - run: npm run lint
